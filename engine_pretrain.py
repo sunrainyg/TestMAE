@@ -10,7 +10,8 @@
 # --------------------------------------------------------
 import math
 import sys
-from typing import Iterable
+from typing import Iterable, Optional
+
 
 import torch
 
@@ -22,7 +23,8 @@ def train_one_epoch(model: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler,
                     log_writer=None,
-                    args=None):
+                    args=None,
+                    train_ae_decoder: Optional[bool] = False):
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -45,7 +47,7 @@ def train_one_epoch(model: torch.nn.Module,
         samples = samples.to(device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
-            loss, _, _ = model(samples, mask_ratio=args.mask_ratio)
+            loss, _, _ = model(samples, mask_ratio=args.mask_ratio, train_ae_decoder=train_ae_decoder)
 
         loss_value = loss.item()
 

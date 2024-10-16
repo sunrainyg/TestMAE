@@ -101,6 +101,8 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
 
+    parser.add_argument('--train_ae_decoder', action='store_true', help='Train autoencoder as decoder')
+
     return parser
 
 
@@ -157,6 +159,10 @@ def main(args):
 
     model.to(device)
 
+    if args.train_ae_decoder:
+        print("Training autoencoder as decoder")
+        model.freeze_encoder_weights()
+
     model_without_ddp = model
     print("Model = %s" % str(model_without_ddp))
 
@@ -192,7 +198,8 @@ def main(args):
             model, data_loader_train,
             optimizer, device, epoch, loss_scaler,
             log_writer=log_writer,
-            args=args
+            args=args,
+            train_ae_decoder=args.train_ae_decoder
         )
         if args.output_dir and (epoch % 20 == 0 or epoch + 1 == args.epochs):
             misc.save_model(

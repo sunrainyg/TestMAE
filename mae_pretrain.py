@@ -27,6 +27,8 @@ if __name__ == '__main__':
     parser.add_argument('--train_ae_decoder', action='store_true', help='Train AE decoder after MAE encoder')
     parser.add_argument('--ae_decoder_epochs', type=int, default=100, help='Number of epochs to train AE decoder')
     parser.add_argument('--log_dir', type=str, default='mae-pretrain', help='Directory name for tensorboard logs')
+    parser.add_argument('--train_full_ae', action='store_true', help='Train full autoencoder (both encoder and decoder)')
+    parser.add_argument('--train_mae_encoder_ae_decoder', action='store_true', help='Train MAE encoder and AE decoder together')
 
     args = parser.parse_args()
 
@@ -52,7 +54,7 @@ if __name__ == '__main__':
                     raise e
         return batch_size
 
-    model = MAE_ViT(mask_ratio=args.mask_ratio, use_ae_decoder=args.use_ae_decoder)
+    model = MAE_ViT(mask_ratio=args.mask_ratio, use_ae_decoder=args.use_ae_decoder, train_full_ae=args.train_full_ae, train_mae_encoder_ae_decoder=args.train_mae_encoder_ae_decoder)
     max_batch_size = get_max_batch_size(model)
     batch_size = min(args.batch_size, max_batch_size)
     load_batch_size = min(args.max_device_batch_size, batch_size)
@@ -90,13 +92,11 @@ if __name__ == '__main__':
         for img, label in tqdm(iter(dataloader)):
             step_count += 1
             img = img.to(device)
-            if model.use_ae_decoder:
+            if model.train_full_ae or model.use_ae_decoder:
                 predicted_img = model(img)
-            else:
-                predicted_img, mask = model(img)
-            if model.use_ae_decoder:
                 loss = torch.mean((predicted_img - img) ** 2)
             else:
+                predicted_img, mask = model(img)
                 loss = torch.mean((predicted_img - img) ** 2 * mask) / args.mask_ratio
             loss.backward()
             if step_count % steps_per_update == 0:
@@ -114,7 +114,7 @@ if __name__ == '__main__':
         with torch.no_grad():
             val_img = torch.stack([val_dataset[i][0] for i in range(200)])
             val_img = val_img.to(device)
-            if model.use_ae_decoder:
+            if model.train_full_ae or model.use_ae_decoder:
                 predicted_val_img = model(val_img)
                 mask = torch.ones_like(predicted_val_img)
             else:
@@ -133,7 +133,10 @@ if __name__ == '__main__':
                 pred = (pred + 1) / 2
                 
                 psnr = peak_signal_noise_ratio(orig, pred, data_range=1)
-                ssim = structural_similarity(orig, pred, data_range=1, multichannel=True)
+                if orig.shape[0] >= 3 and orig.shape[1] >= 3:
+                    ssim = structural_similarity(orig, pred, data_range=1, channel_axis=2, win_size=3)
+                else:
+                    ssim = float('nan')  # or some other placeholder value
                 
                 psnr_values.append(psnr)
                 ssim_values.append(ssim)
@@ -150,14 +153,15 @@ if __name__ == '__main__':
             
         print(f'Epoch {epoch}: PSNR = {avg_psnr:.2f}, SSIM = {avg_ssim:.4f}')
 
-    # Train MAE
+    # Train MAE or Full Autoencoder
     for e in range(args.total_epoch):
         train_epoch(model, dataloader, optim, lr_scheduler, writer, e)
-        visualize(model, val_dataset, writer, e)
-        torch.save(model, f'mae_encoder_ae_decoder_{args.model_path}')
+        if not args.train_ae_decoder:  # Only visualize if not training AE decoder later
+            visualize(model, val_dataset, writer, e)
+        torch.save(model, f'{"full_ae" if args.train_full_ae else "mae"}_encoder_decoder_{args.model_path}')
 
-    # Train AE decoder if specified
-    if args.train_ae_decoder:
+    # Train AE decoder if specified and not training full autoencoder
+    if args.train_ae_decoder and not args.train_full_ae:
         print("Training AE decoder...")
         model.use_ae_decoder = True
         model.decoder = AE_Decoder(image_size=32, patch_size=2, emb_dim=192, num_layer=4, num_head=3).to(device)

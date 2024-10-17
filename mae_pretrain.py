@@ -6,6 +6,8 @@ import torchvision
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import ToTensor, Compose, Normalize
 from tqdm import tqdm
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+import numpy as np
 
 from model import *
 from utils import setup_seed
@@ -118,9 +120,35 @@ if __name__ == '__main__':
             else:
                 predicted_val_img, mask = model(val_img)
             predicted_val_img = predicted_val_img * mask + val_img * (1 - mask)
+            
+            # Calculate PSNR and SSIM
+            psnr_values = []
+            ssim_values = []
+            for i in range(val_img.shape[0]):
+                orig = val_img[i].cpu().numpy().transpose(1, 2, 0)
+                pred = predicted_val_img[i].cpu().numpy().transpose(1, 2, 0)
+                
+                # Normalize images to [0, 1] range for metric calculation
+                orig = (orig + 1) / 2
+                pred = (pred + 1) / 2
+                
+                psnr = peak_signal_noise_ratio(orig, pred, data_range=1)
+                ssim = structural_similarity(orig, pred, data_range=1, multichannel=True)
+                
+                psnr_values.append(psnr)
+                ssim_values.append(ssim)
+            
+            avg_psnr = np.mean(psnr_values)
+            avg_ssim = np.mean(ssim_values)
+            
+            writer.add_scalar(f'{prefix}psnr', avg_psnr, global_step=epoch)
+            writer.add_scalar(f'{prefix}ssim', avg_ssim, global_step=epoch)
+            
             img = torch.cat([val_img * (1 - mask), predicted_val_img, val_img], dim=0)
             img = rearrange(img, '(v h1 w1) c h w -> c (h1 h) (w1 v w)', w1=2, v=3)
             writer.add_image(f'{prefix}mae_image', (img + 1) / 2, global_step=epoch)
+            
+        print(f'Epoch {epoch}: PSNR = {avg_psnr:.2f}, SSIM = {avg_ssim:.4f}')
 
     # Train MAE
     for e in range(args.total_epoch):

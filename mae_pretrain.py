@@ -20,10 +20,11 @@ if __name__ == '__main__':
     parser.add_argument('--mask_ratio', type=float, default=0.75)
     parser.add_argument('--total_epoch', type=int, default=2000)
     parser.add_argument('--warmup_epoch', type=int, default=200)
-    parser.add_argument('--model_path', type=str, default='vit-t-mae.pt')
+    parser.add_argument('--model_path', type=str, default='vit-t-mae_encoder_decoder.pt')
     parser.add_argument('--use_ae_decoder', action='store_true', help='Use AE decoder instead of MAE decoder')
     parser.add_argument('--train_ae_decoder', action='store_true', help='Train AE decoder after MAE encoder')
     parser.add_argument('--ae_decoder_epochs', type=int, default=100, help='Number of epochs to train AE decoder')
+    parser.add_argument('--log_dir', type=str, default='mae-pretrain', help='Directory name for tensorboard logs')
 
     args = parser.parse_args()
 
@@ -60,7 +61,7 @@ if __name__ == '__main__':
     train_dataset = torchvision.datasets.CIFAR10('data', train=True, download=True, transform=Compose([ToTensor(), Normalize(0.5, 0.5)]))
     val_dataset = torchvision.datasets.CIFAR10('data', train=False, download=True, transform=Compose([ToTensor(), Normalize(0.5, 0.5)]))
     dataloader = torch.utils.data.DataLoader(train_dataset, load_batch_size, shuffle=True, num_workers=4)
-    writer = SummaryWriter(os.path.join('logs', 'cifar10', 'mae-pretrain'))
+    writer = SummaryWriter(os.path.join('logs', 'cifar10', args.log_dir))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     model = model.to(device)
@@ -125,7 +126,7 @@ if __name__ == '__main__':
     for e in range(args.total_epoch):
         train_epoch(model, dataloader, optim, lr_scheduler, writer, e)
         visualize(model, val_dataset, writer, e)
-        torch.save(model, args.model_path)
+        torch.save(model, f'mae_encoder_ae_decoder_{args.model_path}')
 
     # Train AE decoder if specified
     if args.train_ae_decoder:

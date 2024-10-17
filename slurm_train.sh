@@ -9,5 +9,5 @@
 #SBATCH --time=12:00:00
 #SBATCH --partition=cbmm
 
-# python mae_pretrain.py --use_ae_decoder --total_epoch 200 --warmup_epoch 20 
-python mae_pretrain.py --total_epoch 100 --warmup_epoch 10 
+# python mae_pretrain.py --use_ae_decoder --total_epoch 200 --warmup_epoch 20 --log_dir mae_encoder_decoder
+python mae_pretrain.py --total_epoch 50 --warmup_epoch 10 --train_ae_decoder --ae_decoder_epochs 50 --log_dir mae_encoder_ae_decoder

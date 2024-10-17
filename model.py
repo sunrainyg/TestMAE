@@ -101,13 +101,13 @@ class MAE_Decoder(torch.nn.Module):
         trunc_normal_(self.pos_embedding, std=.02)
 
     def forward(self, features, backward_indexes):
-        print(features.shape)
+        # print(features.shape)
         T = features.shape[0]
         backward_indexes = torch.cat([torch.zeros(1, backward_indexes.shape[1]).to(backward_indexes), backward_indexes + 1], dim=0)
         features = torch.cat([features, self.mask_token.expand(backward_indexes.shape[0] - features.shape[0], features.shape[1], -1)], dim=0)
         features = take_indexes(features, backward_indexes)
-        print(features.shape)
-        print(self.pos_embedding.shape)
+        # print(features.shape)
+        # print(self.pos_embedding.shape)
         features = features + self.pos_embedding
 
         features = rearrange(features, 't b c -> b t c')
@@ -245,9 +245,9 @@ if __name__ == '__main__':
     encoder = MAE_Encoder()
     decoder = MAE_Decoder()
     features, backward_indexes = encoder(img)
-    print(forward_indexes.shape)
+    # print(forward_indexes.shape)
     predicted_img, mask = decoder(features, backward_indexes)
-    print(predicted_img.shape)
+    # print(predicted_img.shape)
     loss = torch.mean((predicted_img - img) ** 2 * mask / 0.75)
     print(loss)
 

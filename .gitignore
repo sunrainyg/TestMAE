@@ -1,0 +1,13 @@
+*.txt
+*.pth
+*.pkl
+*.pt
+*.pth.tar
+*.tar
+*.tar.gz
+*.zip
+*.rar
+*.7z
+*__pycache__*
+logs/
+data/

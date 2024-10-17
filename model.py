@@ -101,10 +101,13 @@ class MAE_Decoder(torch.nn.Module):
         trunc_normal_(self.pos_embedding, std=.02)
 
     def forward(self, features, backward_indexes):
+        print(features.shape)
         T = features.shape[0]
         backward_indexes = torch.cat([torch.zeros(1, backward_indexes.shape[1]).to(backward_indexes), backward_indexes + 1], dim=0)
         features = torch.cat([features, self.mask_token.expand(backward_indexes.shape[0] - features.shape[0], features.shape[1], -1)], dim=0)
         features = take_indexes(features, backward_indexes)
+        print(features.shape)
+        print(self.pos_embedding.shape)
         features = features + self.pos_embedding
 
         features = rearrange(features, 't b c -> b t c')
@@ -121,6 +124,56 @@ class MAE_Decoder(torch.nn.Module):
 
         return img, mask
 
+
+class AE_Decoder(torch.nn.Module):
+    def __init__(self,
+                 image_size=32,
+                 patch_size=2,
+                 emb_dim=192,
+                 num_layer=4,
+                 num_head=3,
+                 ) -> None:
+        super().__init__()
+
+        self.num_patches = (image_size // patch_size) ** 2
+        # Remove the +1 as we don't have a cls token in AE_Decoder
+        self.pos_embedding = torch.nn.Parameter(torch.zeros(self.num_patches, 1, emb_dim))
+
+        self.transformer = torch.nn.Sequential(*[Block(emb_dim, num_head) for _ in range(num_layer)])
+
+        self.head = torch.nn.Linear(emb_dim, 3 * patch_size ** 2)
+        self.patch2img = Rearrange('(h w) b (c p1 p2) -> b c (h p1) (w p2)', p1=patch_size, p2=patch_size, h=image_size//patch_size)
+
+        self.init_weight()
+
+    def init_weight(self):
+        trunc_normal_(self.pos_embedding, std=.02)
+
+    def forward(self, features):
+        # Remove cls token if present
+        if features.shape[0] == self.num_patches + 1:
+            features = features[1:]
+
+        # Add positional embedding
+        features = features + self.pos_embedding
+
+        # Rearrange and apply transformer
+        features = rearrange(features, 't b c -> b t c')
+        features = self.transformer(features)
+        features = rearrange(features, 'b t c -> t b c')
+
+        # Apply head and reshape to image
+        patches = self.head(features)
+        img = self.patch2img(patches)
+
+        return img
+
+
+
+
+
+
+
 class MAE_ViT(torch.nn.Module):
     def __init__(self,
                  image_size=32,
@@ -131,16 +184,33 @@ class MAE_ViT(torch.nn.Module):
                  decoder_layer=4,
                  decoder_head=3,
                  mask_ratio=0.75,
+                 use_ae_decoder=False,
                  ) -> None:
         super().__init__()
 
         self.encoder = MAE_Encoder(image_size, patch_size, emb_dim, encoder_layer, encoder_head, mask_ratio)
-        self.decoder = MAE_Decoder(image_size, patch_size, emb_dim, decoder_layer, decoder_head)
+        self.use_ae_decoder = use_ae_decoder
+        if use_ae_decoder:
+            self.decoder = AE_Decoder(image_size, patch_size, emb_dim, decoder_layer, decoder_head)
+        else:
+            self.decoder = MAE_Decoder(image_size, patch_size, emb_dim, decoder_layer, decoder_head)
 
     def forward(self, img):
         features, backward_indexes = self.encoder(img)
-        predicted_img, mask = self.decoder(features,  backward_indexes)
-        return predicted_img, mask
+        if self.use_ae_decoder:
+            # Get all features, including masked ones
+            all_features = self.encoder.patchify(img)
+            all_features = rearrange(all_features, 'b c h w -> (h w) b c')
+            all_features = all_features + self.encoder.pos_embedding
+            all_features = torch.cat([self.encoder.cls_token.expand(-1, all_features.shape[1], -1), all_features], dim=0)
+            all_features = rearrange(all_features, 't b c -> b t c')
+            all_features = self.encoder.layer_norm(self.encoder.transformer(all_features))
+            all_features = rearrange(all_features, 'b t c -> t b c')
+            
+            predicted_img = self.decoder(all_features)
+            return predicted_img
+        else:
+            return self.decoder(features, backward_indexes)
 
 class ViT_Classifier(torch.nn.Module):
     def __init__(self, encoder : MAE_Encoder, num_classes=10) -> None:
@@ -164,6 +234,7 @@ class ViT_Classifier(torch.nn.Module):
         return logits
 
 
+
 if __name__ == '__main__':
     shuffle = PatchShuffle(0.75)
     a = torch.rand(16, 2, 10)
@@ -179,3 +250,6 @@ if __name__ == '__main__':
     print(predicted_img.shape)
     loss = torch.mean((predicted_img - img) ** 2 * mask / 0.75)
     print(loss)
+
+
+

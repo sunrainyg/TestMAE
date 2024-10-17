@@ -112,7 +112,7 @@ if __name__ == '__main__':
     def visualize(model, val_dataset, writer, epoch, prefix=''):
         model.eval()
         with torch.no_grad():
-            val_img = torch.stack([val_dataset[i][0] for i in range(16)])
+            val_img = torch.stack([val_dataset[i][0] for i in range(200)])
             val_img = val_img.to(device)
             if model.use_ae_decoder:
                 predicted_val_img = model(val_img)

@@ -29,7 +29,29 @@ if __name__ == '__main__':
 
     setup_seed(args.seed)
 
-    batch_size = args.batch_size
+    # Automatically adjust batch size based on GPU memory
+    def get_max_batch_size(model, input_size=(3, 32, 32)):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(device)
+        
+        batch_size = 1
+        while True:
+            try:
+                torch.cuda.empty_cache()
+                x = torch.randn(batch_size, *input_size).to(device)
+                model(x)
+                batch_size *= 2
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    batch_size //= 2
+                    break
+                else:
+                    raise e
+        return batch_size
+
+    model = MAE_ViT(mask_ratio=args.mask_ratio, use_ae_decoder=args.use_ae_decoder)
+    max_batch_size = get_max_batch_size(model)
+    batch_size = min(args.batch_size, max_batch_size)
     load_batch_size = min(args.max_device_batch_size, batch_size)
 
     assert batch_size % load_batch_size == 0
@@ -41,10 +63,19 @@ if __name__ == '__main__':
     writer = SummaryWriter(os.path.join('logs', 'cifar10', 'mae-pretrain'))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    model = MAE_ViT(mask_ratio=args.mask_ratio, use_ae_decoder=args.use_ae_decoder).to(device)
-    optim = torch.optim.AdamW(model.parameters(), lr=args.base_learning_rate * args.batch_size / 256, betas=(0.9, 0.95), weight_decay=args.weight_decay)
-    lr_func = lambda epoch: min((epoch + 1) / (args.warmup_epoch + 1e-8), 0.5 * (math.cos(epoch / args.total_epoch * math.pi) + 1))
-    lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=lr_func, verbose=True)
+    model = model.to(device)
+
+    # Learning rate scaling based on batch size
+    base_lr = args.base_learning_rate * (batch_size / 256)
+    optim = torch.optim.AdamW(model.parameters(), lr=base_lr, betas=(0.9, 0.95), weight_decay=args.weight_decay)
+
+    # Cosine learning rate schedule with linear warmup
+    def lr_lambda(epoch):
+        if epoch < args.warmup_epoch:
+            return epoch / args.warmup_epoch
+        return 0.5 * (1 + math.cos(math.pi * (epoch - args.warmup_epoch) / (args.total_epoch - args.warmup_epoch)))
+
+    lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=lr_lambda)
 
     step_count = 0
     optim.zero_grad()
@@ -57,12 +88,9 @@ if __name__ == '__main__':
             step_count += 1
             img = img.to(device)
             if model.use_ae_decoder:
-                print("using ae decoder")
                 predicted_img = model(img)
             else:
                 predicted_img, mask = model(img)
-            # print("predicted_img.shape:", predicted_img.shape)
-            # print("img.shape:", img.shape)
             if model.use_ae_decoder:
                 loss = torch.mean((predicted_img - img) ** 2)
             else:
@@ -75,7 +103,8 @@ if __name__ == '__main__':
         lr_scheduler.step()
         avg_loss = sum(losses) / len(losses)
         writer.add_scalar(f'{prefix}mae_loss', avg_loss, global_step=epoch)
-        print(f'In epoch {epoch}, average training loss is {avg_loss}.')
+        writer.add_scalar(f'{prefix}learning_rate', lr_scheduler.get_last_lr()[0], global_step=epoch)
+        print(f'In epoch {epoch}, average training loss is {avg_loss:.4f}, learning rate is {lr_scheduler.get_last_lr()[0]:.6f}')
 
     def visualize(model, val_dataset, writer, epoch, prefix=''):
         model.eval()
@@ -109,13 +138,12 @@ if __name__ == '__main__':
             param.requires_grad = False
 
         # Set up new optimizer and scheduler for AE decoder
-        ae_optim = torch.optim.AdamW(model.decoder.parameters(), lr=args.base_learning_rate, betas=(0.9, 0.95), weight_decay=args.weight_decay)
-        ae_lr_func = lambda epoch: min((epoch + 1) / (args.warmup_epoch + 1e-8), 0.5 * (math.cos(epoch / args.ae_decoder_epochs * math.pi) + 1))
-        ae_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(ae_optim, lr_lambda=ae_lr_func, verbose=True)
+        ae_optim = torch.optim.AdamW(model.decoder.parameters(), lr=base_lr, betas=(0.9, 0.95), weight_decay=args.weight_decay)
+        ae_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(ae_optim, lr_lambda=lr_lambda)
 
         for e in range(args.ae_decoder_epochs):
             train_epoch(model, dataloader, ae_optim, ae_lr_scheduler, writer, e, prefix='ae_')
             visualize(model, val_dataset, writer, e, prefix='ae_')
             torch.save(model, f'ae_decoder_{args.model_path}')
 
-    print("Training completed.")
+    print(f"Training completed. Final batch size: {batch_size}")
